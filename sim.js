@@ -99,6 +99,27 @@ export const setTracers = (v) => { tracers = v; };
 export const setCamOn = (v) => { camOn = v; };
 export const triggerReset = () => { dirty = true; };
 
+// Manual camera state
+let manualPos = new THREE.Vector3(0, 0, 0);
+let manualQuat = new THREE.Quaternion();
+let manualFov = 80;
+const keys = new Set();
+let mouseDown = false;
+let lastMouseX = 0, lastMouseY = 0;
+let needRecenter = false;
+let recenterT = 0;
+const RECENTER_SPEED = 2.0;
+
+// Initialize manual camera from current cam position in phase space projected to 3D view space
+const initManualFromCam = () => {
+  // rel will be computed relative to cam; for manual start, put at origin relative position conceptually
+  manualPos.set(0, 0, 0);
+  manualQuat.copy(C.quaternion);
+  manualFov = 80;
+  C.fov = manualFov;
+  C.updateProjectionMatrix();
+};
+
 // pendulum view
 const pc = document.createElement('canvas'); pc.width = pc.height = 180;
 pc.style.cssText = 'position:fixed;right:12px;top:12px;background:#000a;border-radius:6px';
@@ -114,14 +135,180 @@ const drawPendulum = ([a, b]) => {  // lengths to scale (l1 = 1, l2 = lam); θ =
   [[x1, y1, 1], [x2, y2, P.mu]].forEach(([x, y, m]) => { px.beginPath(); px.arc(x, y, 2 + 3 * Math.cbrt(m), 0, TAU); px.fill(); });
 };
 
+// Input handling
+addEventListener('keydown', e => { keys.add(e.key.toLowerCase()); });
+addEventListener('keyup', e => { keys.delete(e.key.toLowerCase()); });
+
+addEventListener('mousedown', e => { mouseDown = true; lastMouseX = e.clientX; lastMouseY = e.clientY; });
+addEventListener('mouseup', e => { mouseDown = false; });
+addEventListener('mousemove', e => {
+  if (mouseDown) {
+    const dx = e.clientX - lastMouseX;
+    const dy = e.clientY - lastMouseY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    // rotate camera
+    const rotSpeed = 0.005;
+    const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -dx * rotSpeed);
+    const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -dy * rotSpeed);
+    C.quaternion.multiply(qx);
+    C.quaternion.multiply(qy);
+    C.quaternion.normalize();
+    manualQuat.copy(C.quaternion);
+  }
+});
+
+addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 1.1 : 0.9;
+  manualFov = Math.max(5, Math.min(200, manualFov * delta));
+  C.fov = manualFov;
+  C.updateProjectionMatrix();
+}, { passive: false });
+
 let cam = [0, 0, 0, 0], dir = new THREE.Vector3(0, 0, 1), last = performance.now();
+let camWasOn = true;
+let camRoll = 0;
+const rollSpeed = 0.02;
 (function loop() {
   const now = performance.now(), sdt = Math.min((now - last) / 1000, 0.05) * TIME; last = now;
 
+  // Global controls (work in both modes)
+  if (keys.has('z')) {
+    manualFov = Math.max(5, manualFov - 1);
+    C.fov = manualFov; C.updateProjectionMatrix();
+  }
+  if (keys.has('x')) {
+    manualFov = Math.min(200, manualFov + 1);
+    C.fov = manualFov; C.updateProjectionMatrix();
+  }
+
   if (dirty) { seeds.forEach(s => { s.y = project(s.y); s.z = pert(s.y); s.acc = s.w = s.lam = 0; }); cam = project(cam); dirty = false; }
-  const cv = vel(cam);
-  if (camOn) cam = advance(cam, sdt);
-  dir.copy(cv.normalize());
+
+  // Detect transition from camOn -> camOff or camOff -> camOn
+  if (camWasOn !== camOn) {
+    if (!camOn) {
+      // Just paused - init manual camera to current orientation
+      manualQuat.copy(C.quaternion);
+      manualFov = C.fov;
+    } else {
+      // Just reactivated - check if cam position is valid
+      const K = P.E - V(cam[0], cam[1]);
+      const Tval = T(cam);
+      const k = K / Tval;
+      if (!isFinite(k) || k < 0) {
+        needRecenter = true;
+        recenterT = 0;
+      }
+    }
+    camWasOn = camOn;
+  }
+
+  if (camOn) {
+    if (needRecenter) {
+      // Smoothly move camera back to origin and rotate to flow direction
+      recenterT += sdt;
+      const t = Math.min(recenterT / 2.0, 1.0); // 2 seconds to recenter
+      // Move cam towards a valid position near origin
+      const targetCam = project([0, 0, 0, 0]);
+      cam[0] += (targetCam[0] - cam[0]) * t * 0.1;
+      cam[1] += (targetCam[1] - cam[1]) * t * 0.1;
+      cam[2] += (targetCam[2] - cam[2]) * t * 0.1;
+      cam[3] += (targetCam[3] - cam[3]) * t * 0.1;
+      cam = project(cam);
+      const cv = vel(cam);
+      dir.copy(cv.normalize());
+      // Align to flow
+      const forward = dir.clone();
+      const up = new THREE.Vector3(0, 1, 0);
+      let right = new THREE.Vector3().crossVectors(up, forward);
+      if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
+      right.normalize();
+      const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
+      const m = new THREE.Matrix4().makeBasis(right, up2, forward);
+      C.quaternion.setFromRotationMatrix(m);
+      // Apply roll around heading if keys pressed
+      if (keys.has('q')) {
+        const qroll = new THREE.Quaternion().setFromAxisAngle(forward, rollSpeed);
+        C.quaternion.multiply(qroll);
+      } else if (keys.has('e')) {
+        const qroll = new THREE.Quaternion().setFromAxisAngle(forward, -rollSpeed);
+        C.quaternion.multiply(qroll);
+      }
+      if (t >= 1.0) { needRecenter = false; }
+    } else {
+      const cv = vel(cam);
+      cam = advance(cam, sdt);
+      dir.copy(cv.normalize());
+      // Align to flow direction
+      const forward = dir.clone();
+      const up = new THREE.Vector3(0, 1, 0);
+      let right = new THREE.Vector3().crossVectors(up, forward);
+      if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
+      right.normalize();
+      const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
+      const mat = new THREE.Matrix4().makeBasis(right, up2, forward);
+      C.quaternion.setFromRotationMatrix(mat);
+      // Apply roll around heading if keys pressed
+      if (keys.has('q')) {
+        const qroll = new THREE.Quaternion().setFromAxisAngle(forward, rollSpeed);
+        C.quaternion.multiply(qroll);
+      } else if (keys.has('e')) {
+        const qroll = new THREE.Quaternion().setFromAxisAngle(forward, -rollSpeed);
+        C.quaternion.multiply(qroll);
+      }
+    }
+  } else {
+    // Manual mode - move camera in phase space
+    const moveSpeed = 0.02 * sdt * 60;
+    // Get camera direction in world/view space relative to current heading
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(C.quaternion);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(C.quaternion);
+    const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(C.quaternion);
+    
+    // Map to phase space coordinates (θ1, θ2, ω1 scaled) - w/s pan up/down
+    if (keys.has('w') || keys.has('arrowup')) {
+      cam[0] = wrap(cam[0] + upDir.x * moveSpeed);
+      cam[1] = wrap(cam[1] + upDir.y * moveSpeed);
+      cam[2] = cam[2] + upDir.z * moveSpeed / P.kw;
+    }
+    if (keys.has('s') || keys.has('arrowdown')) {
+      cam[0] = wrap(cam[0] - upDir.x * moveSpeed);
+      cam[1] = wrap(cam[1] - upDir.y * moveSpeed);
+      cam[2] = cam[2] - upDir.z * moveSpeed / P.kw;
+    }
+    if (keys.has('a')) {
+      cam[0] = wrap(cam[0] - right.x * moveSpeed);
+      cam[1] = wrap(cam[1] - right.y * moveSpeed);
+      cam[2] = cam[2] - right.z * moveSpeed / P.kw;
+    }
+    if (keys.has('d')) {
+      cam[0] = wrap(cam[0] + right.x * moveSpeed);
+      cam[1] = wrap(cam[1] + right.y * moveSpeed);
+      cam[2] = cam[2] + right.z * moveSpeed / P.kw;
+    }
+    if (keys.has('arrowleft')) {
+      cam[0] = wrap(cam[0] - right.x * moveSpeed);
+      cam[1] = wrap(cam[1] - right.y * moveSpeed);
+      cam[2] = cam[2] - right.z * moveSpeed / P.kw;
+    }
+    if (keys.has('arrowright')) {
+      cam[0] = wrap(cam[0] + right.x * moveSpeed);
+      cam[1] = wrap(cam[1] + right.y * moveSpeed);
+      cam[2] = cam[2] + right.z * moveSpeed / P.kw;
+    }
+    
+    // Roll along current heading of camera
+    const forwardMan = new THREE.Vector3(0, 0, -1).applyQuaternion(C.quaternion);
+    if (keys.has('q')) {
+      const qroll = new THREE.Quaternion().setFromAxisAngle(forwardMan, rollSpeed);
+      C.quaternion.multiply(qroll);
+    } else if (keys.has('e')) {
+      const qroll = new THREE.Quaternion().setFromAxisAngle(forwardMan, -rollSpeed);
+      C.quaternion.multiply(qroll);
+    }
+    manualQuat.copy(C.quaternion);
+  }
 
   if (tracers) {
     seeds.forEach((s, i) => {
@@ -141,9 +328,6 @@ let cam = [0, 0, 0, 0], dir = new THREE.Vector3(0, 0, 1), last = performance.now
   });
   mesh.instanceMatrix.needsUpdate = true;
 
-  fwd.set(0, 0, -1).applyQuaternion(C.quaternion);
-  C.quaternion.premultiply(dq.setFromUnitVectors(fwd, dir));
-  C.quaternion.normalize();
   drawPendulum(cam);
   R.render(S, C); requestAnimationFrame(loop);
 })();
