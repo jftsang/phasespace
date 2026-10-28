@@ -4,7 +4,7 @@
   "source": "doublePendulum.html",
   "scripts": {
     "dev": "parcel",
-    "build": "parcel build --no-scope-hoist"
+    "build": "parcel build --no-scope-hoist --public-url /phasespace/"
   },
   "dependencies": {
     "preact": "^10.24.3",
