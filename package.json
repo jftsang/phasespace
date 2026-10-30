@@ -4,7 +4,7 @@
   "source": "doublePendulum.html",
   "scripts": {
     "dev": "parcel",
-    "build": "parcel build --no-scope-hoist"
+    "build": "node scripts/build.js"
   },
   "dependencies": {
     "camera-controls": "^2.9.0",

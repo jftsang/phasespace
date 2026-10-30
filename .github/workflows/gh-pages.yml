@@ -17,6 +17,8 @@ jobs:
           node-version: lts/*
       - run: npm install
       - run: npm run build
+        env:
+          PUBLIC_URL: /phasespace
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist # whatever your build spits out
