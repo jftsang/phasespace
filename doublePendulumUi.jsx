@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
-import { P, setParams, setTracers, setCamOn, triggerReset } from './sim';
+import { P, setParams, setTracers, setCamOn, triggerReset } from './doublePendulum';
 
 function Controls() {
   const [muExp, setMuExp] = useState(0);

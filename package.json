@@ -1,7 +1,7 @@
 {
   "name": "phasespace",
   "version": "1.0.0",
-  "source": "doublePendulum.html",
+  "source": "index.html",
   "scripts": {
     "dev": "parcel",
     "build": "node scripts/build.js"
