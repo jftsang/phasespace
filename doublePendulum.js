@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import CameraControls from 'camera-controls';
+import {rk4} from './helpers.js';
 
 CameraControls.install({THREE: THREE});
 
@@ -30,11 +31,6 @@ const f = ([a, b, w1, w2]) => {
   const det = lam * (1 + mu - mu * c * c);
   return [w1, w2, lam * (R1 - mu * c * R2) / det, ((1 + mu) * R2 - c * R1) / det];
 };
-const rk4 = (y, h) => {
-  const add = (y, k, s) => y.map((v, i) => v + s * k[i]);
-  const k1 = f(y), k2 = f(add(y, k1, h / 2)), k3 = f(add(y, k2, h / 2)), k4 = f(add(y, k3, h));
-  return y.map((v, i) => v + h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
-};
 
 // Lᵀω = r(cosφ, sinφ), M = LLᵀ
 const L = c => {
@@ -44,7 +40,8 @@ const L = c => {
 const V = (a, b) => -(1 + P.mu) * Math.cos(a) - P.mu * P.lam * Math.cos(b);
 const T = ([a, b, w1, w2]) => 0.5 * ((1 + P.mu) * w1 * w1 + P.mu * P.lam * P.lam * w2 * w2 + 2 * P.mu * P.lam * Math.cos(a - b) * w1 * w2);
 const step = (y, h) => {  // RK4, then rescale ω to stay exactly on H = E
-  const y2 = rk4(y, h), k = Math.sqrt((P.E - V(y2[0], y2[1])) / T(y2));
+  const y2 = rk4(f, y, h);
+  const k = Math.sqrt((P.E - V(y2[0], y2[1])) / T(y2));
   return isFinite(k) ? [y2[0], y2[1], y2[2] * k, y2[3] * k] : y2;
 };
 const advance = (y, T) => {  // integrate over sim time T in substeps of at most 0.013
@@ -72,8 +69,11 @@ const project = y => {  // keep (θ, ω direction), rescale |ω| to the new ener
 const D0 = 1e-6, TAU_F = 8, LREF = 0.5;  // FTLE: separation, averaging window (sim time), colour scale
 const pert = y => project([y[0] + D0, y[1], y[2], y[3]]);
 const ftle = (s, dt) => {  // Benettin: track log-growth of a nearby shadow orbit, renormalise
-  const dx = wrap(s.z[0] - s.y[0]), dy = wrap(s.z[1] - s.y[1]), dz = s.z[2] - s.y[2], dw = s.z[3] - s.y[3];
-  const d = Math.hypot(dx, dy, dz, dw), a = Math.exp(-dt / TAU_F);
+  const [dx, dy, dz, dw] = [
+    wrap(s.z[0] - s.y[0]), wrap(s.z[1] - s.y[1]), s.z[2] - s.y[2], s.z[3] - s.y[3]
+  ];
+  const d = Math.hypot(dx, dy, dz, dw);
+  const a = Math.exp(-dt / TAU_F);
   if (!(d > 0) || d > 0.1) {
     s.z = pert(s.y);
     return;
@@ -117,7 +117,7 @@ addEventListener('keyup', e => {
   keyState[e.code] = false;
 });
 addEventListener('mousedown', e => {
-  if (!camOn) {
+  if (!camMoves) {
     mouseDown = true;
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
@@ -127,7 +127,7 @@ addEventListener('mouseup', e => {
   mouseDown = false;
 });
 addEventListener('mousemove', e => {
-  if (!camOn && mouseDown) {
+  if (!camMoves && mouseDown) {
     const dx = e.clientX - lastMouseX;
     const dy = e.clientY - lastMouseY;
     lastMouseX = e.clientX;
@@ -139,7 +139,7 @@ addEventListener('mousemove', e => {
   }
 });
 addEventListener('wheel', e => {
-  if (!camOn) {
+  if (!camMoves) {
     e.preventDefault();
     const delta = e.deltaY > 0 ? 1.1 : 0.9;
     C.fov = Math.max(5, Math.min(200, C.fov * delta));
@@ -152,11 +152,16 @@ addEventListener('resize', () => {
   C.updateProjectionMatrix();
 });
 
-const N = 10000, seeds = [];
-const m = new THREE.Matrix4(), up = new THREE.Vector3(0, 1, 0);
-const col = new THREE.Color(), rel = new THREE.Vector3(), sc = new THREE.Vector3(), fwd = new THREE.Vector3(),
-  dq = new THREE.Quaternion();
-const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.018, 5), new THREE.MeshBasicMaterial(), N);
+const N = 5000;
+const seeds = [];
+const m = new THREE.Matrix4();
+const up = new THREE.Vector3(0, 1, 0);
+const col = new THREE.Color();
+const rel = new THREE.Vector3();
+const sc = new THREE.Vector3();
+const mesh = new THREE.InstancedMesh(
+  new THREE.CylinderGeometry(0.004, 0.002, 0.18, 5), new THREE.MeshBasicMaterial(), N
+);
 mesh.frustumCulled = false;
 S.add(mesh);
 for (let i = 0; i < N; i++) {
@@ -165,13 +170,13 @@ for (let i = 0; i < N; i++) {
 }
 
 // State
-export let tracers = true;
-export let camOn = true;
+export let tracersMove = true;
+export let camMoves = true;
 export const setTracers = (v) => {
-  tracers = v;
+  tracersMove = v;
 };
 export const setCamOn = (v) => {
-  camOn = v;
+  camMoves = v;
 };
 export const triggerReset = () => {
   dirty = true;
@@ -180,8 +185,6 @@ export const triggerReset = () => {
 // Manual camera state
 let needRecenter = false;
 let recenterT = 0;
-let lastCamValid = true;
-
 // pendulum view
 const pc = document.createElement('canvas');
 pc.width = pc.height = 180;
@@ -207,11 +210,12 @@ const drawPendulum = ([a, b]) => {  // lengths to scale (l1 = 1, l2 = lam); θ =
   });
 };
 
-let cam = [0, 0, 0, 0], dir = new THREE.Vector3(0, 0, 1), last = performance.now();
+let cam = [0, 0, 0, 0];
+let dir = new THREE.Vector3(0, 0, 1);
+let last = performance.now();
 let camWasOn = true;
 
 (function loop() {
-  const delta = clock.getDelta();
   const now = performance.now(), sdt = Math.min((now - last) / 1000, 0.05) * TIME;
   last = now;
 
@@ -226,8 +230,8 @@ let camWasOn = true;
   }
 
   // Detect transition from camOn -> camOff or camOff -> camOn
-  if (camWasOn !== camOn) {
-    if (!camOn) {
+  if (camWasOn !== camMoves) {
+    if (!camMoves) {
       // Just paused - enable manual navigation
       controls.enabled = true;
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(C.quaternion);
@@ -244,46 +248,37 @@ let camWasOn = true;
         recenterT = 0;
       }
     }
-    camWasOn = camOn;
+    camWasOn = camMoves;
   }
 
-  if (camOn) {
+  if (camMoves) {
     if (needRecenter) {
       // Smoothly move camera back to origin and rotate to flow direction
       recenterT += sdt;
       const t = Math.min(recenterT / 2.0, 1.0);
+      if (t >= 1.0) {
+        needRecenter = false;
+      }
       const targetCam = project([0, 0, 0, 0]);
       cam[0] += (targetCam[0] - cam[0]) * t * 0.1;
       cam[1] += (targetCam[1] - cam[1]) * t * 0.1;
       cam[2] += (targetCam[2] - cam[2]) * t * 0.1;
       cam[3] += (targetCam[3] - cam[3]) * t * 0.1;
       cam = project(cam);
-      const cv = vel(cam);
-      dir.copy(cv.normalize());
-      const forward = dir.clone();
-      const up = new THREE.Vector3(0, 1, 0);
-      let right = new THREE.Vector3().crossVectors(up, forward);
-      if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
-      right.normalize();
-      const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
-      const m = new THREE.Matrix4().makeBasis(right, up2, forward);
-      C.quaternion.setFromRotationMatrix(m);
-      if (t >= 1.0) {
-        needRecenter = false;
-      }
     } else {
-      const cv = vel(cam);
       cam = advance(cam, sdt);
-      dir.copy(cv.normalize());
-      const forward = dir.clone();
-      const up = new THREE.Vector3(0, 1, 0);
-      let right = new THREE.Vector3().crossVectors(up, forward);
-      if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
-      right.normalize();
-      const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
-      const mat = new THREE.Matrix4().makeBasis(right, up2, forward);
-      C.quaternion.setFromRotationMatrix(mat);
     }
+    const cv = vel(cam);
+
+    dir.copy(cv.normalize());
+    const forward = dir.clone();
+    const up = new THREE.Vector3(0, 1, 0);
+    let right = new THREE.Vector3().crossVectors(up, forward);
+    if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
+    right.normalize();
+    const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
+    const mat = new THREE.Matrix4().makeBasis(right, up2, forward);
+    C.quaternion.setFromRotationMatrix(mat);
   } else {
     controls.enabled = false;
     // Manual controls as originally specified
@@ -339,7 +334,7 @@ let camWasOn = true;
     }
   }
 
-  if (tracers) {
+  if (tracersMove) {
     seeds.forEach((s, i) => {
       s.y = advance(s.y, sdt);
       s.z = advance(s.z, sdt);
