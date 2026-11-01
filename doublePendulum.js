@@ -99,7 +99,6 @@ const S = new THREE.Scene();
 S.background = new THREE.Color(0);
 S.fog = new THREE.Fog(0, 2, 8);
 const C = new THREE.PerspectiveCamera(80, innerWidth / innerHeight, 0.01, 10);
-const clock = new THREE.Clock();
 const controls = new CameraControls(C, R.domElement);
 controls.mouseButtons.left = CameraControls.ACTION.ROTATE;
 controls.mouseButtons.right = CameraControls.ACTION.TRUCK;
@@ -190,7 +189,7 @@ export const triggerReset = () => {
 
 // Manual camera state
 let needRecenter = false;
-let recenterT = 0;
+let recenterTarget = null;
 // pendulum view
 const pc = document.createElement('canvas');
 pc.width = pc.height = 180;
@@ -216,6 +215,7 @@ const drawPendulum = ([a, b]) => {  // lengths to scale (l1 = 1, l2 = lam); θ =
   });
 };
 
+const camUp = new THREE.Vector3(0, 1, 0);
 let cam = [0, 0, 0, 0];
 let dir = new THREE.Vector3(0, 0, 1);
 let last = performance.now();
@@ -252,7 +252,7 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
       const k = K / Tval;
       if (!isFinite(k) || k < 0) {
         needRecenter = true;
-        recenterT = 0;
+        recenterTarget = fromChart(0, 0, 0, 1) || sample();
       }
     }
     camWasOn = camMoves;
@@ -261,19 +261,12 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
   if (camMoves) {
     if (needRecenter) {
       // Smoothly move camera back to origin and rotate to flow direction
-      recenterT += sdt;
-      const t = Math.min(recenterT / 2.0, 1.0);
-      if (t >= 1.0) {
-        needRecenter = false;
-      }
-      const targetCam = project([0, 0, 0, 0]);
-      cam[0] += (targetCam[0] - cam[0]) * t * 0.1;
-      cam[1] += (targetCam[1] - cam[1]) * t * 0.1;
-      cam[2] += (targetCam[2] - cam[2]) * t * 0.1;
-      cam[3] += (targetCam[3] - cam[3]) * t * 0.1;
-
-
-      cam = project(cam);
+      cam = project(cam.map(
+        (c, i) => c + (i < 2 ? wrap(recenterTarget[i] - c) : recenterTarget[i] - c) * 0.1
+      ));
+      if (cam.every(
+        (c, i) => Math.abs(i < 2 ? wrap(recenterTarget[i] - c) : recenterTarget[i] - c) < 1e-3)
+      ) needRecenter = false;
     } else {
       cam = advance(cam, sdt);
     }
@@ -281,15 +274,16 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
 
     dir.copy(cv.normalize());
     const forward = dir.clone();
-    const up = new THREE.Vector3(0, 1, 0);
-    let right = new THREE.Vector3().crossVectors(up, forward);
-    if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
-    right.normalize();
-    const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
+    camUp.addScaledVector(forward, -camUp.dot(forward));
+    if (camUp.lengthSq() < 1e-6) camUp.set(1, 0, 0).addScaledVector(forward, -forward.x);
+    camUp.normalize();
+    const up2 = camUp;
+    const right = new THREE.Vector3().crossVectors(up2, forward).normalize();
     const mat = new THREE.Matrix4().makeBasis(right.clone().negate(), up2, forward.clone().negate());  // three.js cameras look down -Z
     C.quaternion.setFromRotationMatrix(mat);
   } else {
     controls.enabled = false;
+    camUp.set(0, 1, 0).applyQuaternion(C.quaternion);
     // Manual controls as originally specified
     const moveSpeed = 0.02;
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(C.quaternion);
@@ -306,21 +300,12 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
       cam[1] = wrap(cam[1] - upDir.y * moveSpeed);
       shiftP(-upDir.z * moveSpeed / P.kw);
     }
-    if (keyState['KeyA']) {
+    if (keyState['KeyA'] || keyState['ArrowLeft']) {
       cam[0] = wrap(cam[0] - right.x * moveSpeed);
       cam[1] = wrap(cam[1] - right.y * moveSpeed);
       shiftP(-right.z * moveSpeed / P.kw);
     }
-    if (keyState['KeyD']) {
-      cam[0] = wrap(cam[0] + right.x * moveSpeed);
-      cam[1] = wrap(cam[1] + right.y * moveSpeed);
-      shiftP(right.z * moveSpeed / P.kw);
-    }
-    if (keyState['ArrowLeft']) {
-      cam[0] = wrap(cam[0] - right.x * moveSpeed);
-      cam[1] = wrap(cam[1] - right.y * moveSpeed);
-      shiftP(-right.z * moveSpeed / P.kw);    }
-    if (keyState['ArrowRight']) {
+    if (keyState['KeyD'] || keyState['ArrowRight']) {
       cam[0] = wrap(cam[0] + right.x * moveSpeed);
       cam[1] = wrap(cam[1] + right.y * moveSpeed);
       shiftP(right.z * moveSpeed / P.kw);
