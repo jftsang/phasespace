@@ -152,7 +152,7 @@ addEventListener('resize', () => {
   C.updateProjectionMatrix();
 });
 
-const N = 5000;
+const N = 5000, NS = 1, W = 2 * NS + 1, M = W * W;  // M periodic copies per tracer
 const seeds = [];
 const m = new THREE.Matrix4();
 const up = new THREE.Vector3(0, 1, 0);
@@ -160,13 +160,14 @@ const col = new THREE.Color();
 const rel = new THREE.Vector3();
 const sc = new THREE.Vector3();
 const mesh = new THREE.InstancedMesh(
-  new THREE.CylinderGeometry(0.004, 0.002, 0.18, 5), new THREE.MeshBasicMaterial(), N
+  new THREE.CylinderGeometry(0.004, 0.002, 0.18, 5), new THREE.MeshBasicMaterial(), N * M
 );
 mesh.frustumCulled = false;
 S.add(mesh);
 for (let i = 0; i < N; i++) {
   seeds.push({y: [0, 0, 0, 0], z: [0, 0, 0, 0], acc: 0, w: 0, lam: 0, speed: 0, q: new THREE.Quaternion()});
-  mesh.setColorAt(i, col.setRGB(1, 1, 1));
+  for (let j = 0; j < M; j++)
+    mesh.setColorAt(i * M + j, col.setRGB(1, 1, 1));
 }
 
 // State
@@ -342,16 +343,20 @@ let camWasOn = true;
       const v = vel(s.y), speed = v.length();
       s.speed = speed;
       s.q.setFromUnitVectors(up, v.divideScalar(speed));
-      mesh.setColorAt(i, col.setHSL(0.7 - Math.min(Math.max(s.lam, 0) / LREF, 1) * 0.7, 1, 0.55));
+      col.setHSL(0.7 - Math.min(Math.max(s.lam, 0) / LREF, 1) * 0.7, 1, 0.55);
+      for (let j = 0; j < M; j++) mesh.setColorAt(i * M + j, col);
     });
     mesh.instanceColor.needsUpdate = true;
   }
   seeds.forEach((s, i) => {
-    rel.set(wrap(s.y[0] - cam[0]), wrap(s.y[1] - cam[1]), P.kw * (s.y[2] - cam[2]));
-    const k = Math.max(0, Math.min(1, (Math.PI - Math.max(Math.abs(rel.x), Math.abs(rel.y))) / 0.6));
     const len = Math.min(Math.max(s.speed / P.ref, 0.05), 4);  // rod length ∝ speed, in units of the base 0.08
-    m.compose(rel, s.q, sc.set(k, k * len, k));
-    mesh.setMatrixAt(i, m);
+    const x = wrap(s.y[0] - cam[0]), y = wrap(s.y[1] - cam[1]), z = P.kw * (s.y[2] - cam[2]);
+    sc.set(1, len, 1);
+    for (let j = 0; j < M; j++) {
+      rel.set(x + TAU * ((j % W) - NS), y + TAU * (Math.floor(j / W) - NS), z);
+      m.compose(rel, s.q, sc);
+      mesh.setMatrixAt(i * M + j, m);
+    }
   });
   mesh.instanceMatrix.needsUpdate = true;
 

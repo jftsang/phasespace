@@ -6,7 +6,7 @@ function Controls() {
   const [muExp, setMuExp] = useState(0);
   const [lamExp, setLamExp] = useState(0);
   const [eVal, setEVal] = useState(2.5);
-  const [tracers, setTracersState] = useState(true);
+  const [tracers, setTracersState] = useState(false);
   const [camOn, setCamOnState] = useState(true);
 
   const mu = Math.pow(10, muExp);
