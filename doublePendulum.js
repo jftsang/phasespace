@@ -17,8 +17,10 @@ export const setParams = (mu, lam, t) => {
   P.lam = lam;
   P.Vmax = 1 + mu + mu * lam;
   P.E = P.Vmax * (t - 1);                  // t = 0: min V, t = 2: max V
-  P.wmax = Math.sqrt(2 * (P.E + P.Vmax));  // |ω1| <= wmax on the surface
-  P.kw = Math.PI / P.wmax;                 // scale ω1 axis to ±π
+  P.wmax = Math.sqrt(2 * (P.E + P.Vmax));
+  P.pmax = Math.sqrt(2 * (P.E + P.Vmax) * (1 + mu));  // |p1| <= pmax on the surface
+  P.kw = Math.PI / P.pmax;                            // scale p1 axis to ±π
+
   P.ref = 2 * P.wmax;
   TIME = 2 * Math.PI * Math.min(1, Math.sqrt(lam)) / T_REF;  // fastest linearised period is 30 s for lam < 1; T1 = 30 s for lam >= 1
 };
@@ -39,6 +41,8 @@ const L = c => {
 };
 const V = (a, b) => -(1 + P.mu) * Math.cos(a) - P.mu * P.lam * Math.cos(b);
 const T = ([a, b, w1, w2]) => 0.5 * ((1 + P.mu) * w1 * w1 + P.mu * P.lam * P.lam * w2 * w2 + 2 * P.mu * P.lam * Math.cos(a - b) * w1 * w2);
+const p1 = ([a, b, w1, w2]) => (1 + P.mu) * w1 + P.mu * P.lam * Math.cos(a - b) * w2;  // ∂T/∂ω1
+
 const step = (y, h) => {  // RK4, then rescale ω to stay exactly on H = E
   const y2 = rk4(f, y, h);
   const k = Math.sqrt((P.E - V(y2[0], y2[1])) / T(y2));
@@ -50,8 +54,9 @@ const advance = (y, T) => {  // integrate over sim time T in substeps of at most
   return y;
 };
 const vel = y => {
-  const d = f(y);
-  return new THREE.Vector3(d[0], d[1], P.kw * d[2]);
+  const d = f(y), df = y[0] - y[1];
+  const dp1 = -P.mu * P.lam * Math.sin(df) * y[2] * y[3] - (1 + P.mu) * Math.sin(y[0]);  // ṗ1 = ∂L/∂θ1
+  return new THREE.Vector3(d[0], d[1], P.kw * dp1);
 };
 const sample = () => {  // Liouville-distributed point on H = E
   for (; ;) {
@@ -215,6 +220,7 @@ let cam = [0, 0, 0, 0];
 let dir = new THREE.Vector3(0, 0, 1);
 let last = performance.now();
 let camWasOn = true;
+const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] - cam[1]) * cam[3]) / (1 + P.mu); };
 
 (function loop() {
   const now = performance.now(), sdt = Math.min((now - last) / 1000, 0.05) * TIME;
@@ -265,6 +271,8 @@ let camWasOn = true;
       cam[1] += (targetCam[1] - cam[1]) * t * 0.1;
       cam[2] += (targetCam[2] - cam[2]) * t * 0.1;
       cam[3] += (targetCam[3] - cam[3]) * t * 0.1;
+
+
       cam = project(cam);
     } else {
       cam = advance(cam, sdt);
@@ -278,7 +286,7 @@ let camWasOn = true;
     if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
     right.normalize();
     const up2 = new THREE.Vector3().crossVectors(forward, right).normalize();
-    const mat = new THREE.Matrix4().makeBasis(right, up2, forward);
+    const mat = new THREE.Matrix4().makeBasis(right.clone().negate(), up2, forward.clone().negate());  // three.js cameras look down -Z
     C.quaternion.setFromRotationMatrix(mat);
   } else {
     controls.enabled = false;
@@ -291,34 +299,34 @@ let camWasOn = true;
     if (keyState['KeyW'] || keyState['ArrowUp']) {
       cam[0] = wrap(cam[0] + upDir.x * moveSpeed);
       cam[1] = wrap(cam[1] + upDir.y * moveSpeed);
-      cam[2] = cam[2] + upDir.z * moveSpeed / P.kw;
+      shiftP(upDir.z * moveSpeed / P.kw);
     }
     if (keyState['KeyS'] || keyState['ArrowDown']) {
       cam[0] = wrap(cam[0] - upDir.x * moveSpeed);
       cam[1] = wrap(cam[1] - upDir.y * moveSpeed);
-      cam[2] = cam[2] - upDir.z * moveSpeed / P.kw;
+      shiftP(-upDir.z * moveSpeed / P.kw);
     }
     if (keyState['KeyA']) {
       cam[0] = wrap(cam[0] - right.x * moveSpeed);
       cam[1] = wrap(cam[1] - right.y * moveSpeed);
-      cam[2] = cam[2] - right.z * moveSpeed / P.kw;
+      shiftP(-right.z * moveSpeed / P.kw);
     }
     if (keyState['KeyD']) {
       cam[0] = wrap(cam[0] + right.x * moveSpeed);
       cam[1] = wrap(cam[1] + right.y * moveSpeed);
-      cam[2] = cam[2] + right.z * moveSpeed / P.kw;
+      shiftP(right.z * moveSpeed / P.kw);
     }
     if (keyState['ArrowLeft']) {
       cam[0] = wrap(cam[0] - right.x * moveSpeed);
       cam[1] = wrap(cam[1] - right.y * moveSpeed);
-      cam[2] = cam[2] - right.z * moveSpeed / P.kw;
-    }
+      shiftP(-right.z * moveSpeed / P.kw);    }
     if (keyState['ArrowRight']) {
       cam[0] = wrap(cam[0] + right.x * moveSpeed);
       cam[1] = wrap(cam[1] + right.y * moveSpeed);
-      cam[2] = cam[2] + right.z * moveSpeed / P.kw;
+      shiftP(right.z * moveSpeed / P.kw);
     }
 
+    cam = project(cam);
     if (keyState['KeyQ']) {
       C.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(forward, 0.02));
     }
@@ -353,7 +361,7 @@ let camWasOn = true;
     const x = wrap(s.y[0] - cam[0]), y = wrap(s.y[1] - cam[1]), z = P.kw * (s.y[2] - cam[2]);
     sc.set(1, len, 1);
     for (let j = 0; j < M; j++) {
-      rel.set(x + TAU * ((j % W) - NS), y + TAU * (Math.floor(j / W) - NS), z);
+      rel.set(wrap(s.y[0] - cam[0]), wrap(s.y[1] - cam[1]), P.kw * (p1(s.y) - p1(cam)));
       m.compose(rel, s.q, sc);
       mesh.setMatrixAt(i * M + j, m);
     }
