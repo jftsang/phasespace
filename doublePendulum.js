@@ -358,10 +358,10 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
   }
   seeds.forEach((s, i) => {
     const len = Math.min(Math.max(s.speed / P.ref, 0.05), 4);  // rod length ∝ speed, in units of the base 0.08
-    const x = wrap(s.y[0] - cam[0]), y = wrap(s.y[1] - cam[1]), z = P.kw * (s.y[2] - cam[2]);
+    const x = wrap(s.y[0] - cam[0]), y = wrap(s.y[1] - cam[1]), z = P.kw * (p1(s.y) - p1(cam));
     sc.set(1, len, 1);
     for (let j = 0; j < M; j++) {
-      rel.set(wrap(s.y[0] - cam[0]), wrap(s.y[1] - cam[1]), P.kw * (p1(s.y) - p1(cam)));
+      rel.set(x + TAU * ((j % W) - NS), y + TAU * (Math.floor(j / W) - NS), z);
       m.compose(rel, s.q, sc);
       mesh.setMatrixAt(i * M + j, m);
     }
