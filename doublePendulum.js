@@ -226,7 +226,17 @@ let cam = [0, 0, 0, 0];
 let dir = new THREE.Vector3(0, 0, 1);
 let last = performance.now();
 let camWasOn = true;
-const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] - cam[1]) * cam[3]) / (1 + P.mu); };
+const fromChart = (a, b, p, sg) => {  // point on H = E with given (θ1, θ2, p1) and sign(ω2) = sg; null if outside the chart image
+  const A = 1 + P.mu, Bc = P.mu * P.lam * Math.cos(a - b);
+  const q = 2 * (P.E - V(a, b)) - p * p / A, e2 = P.mu * P.lam * P.lam - Bc * Bc / A;
+  if (!(q >= 0)) return null;
+  const w2 = sg * Math.sqrt(q / e2);
+  return [a, b, (p - Bc * w2) / A, w2];
+};
+const nudge = (v, d) => {
+  const y = fromChart(wrap(cam[0] + v.x * d), wrap(cam[1] + v.y * d), p1(cam) + v.z * d / P.kw, cam[3] < 0 ? -1 : 1);
+  if (y) cam = y;
+};
 
 (function loop() {
   const now = performance.now(), sdt = Math.min((now - last) / 1000, 0.05) * TIME;
@@ -296,28 +306,11 @@ const shiftP = dp => { cam[2] = (p1(cam) + dp - P.mu * P.lam * Math.cos(cam[0] -
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(C.quaternion);
     const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(C.quaternion);
 
-    if (keyState['KeyW'] || keyState['ArrowUp']) {
-      cam[0] = wrap(cam[0] + upDir.x * moveSpeed);
-      cam[1] = wrap(cam[1] + upDir.y * moveSpeed);
-      shiftP(upDir.z * moveSpeed / P.kw);
-    }
-    if (keyState['KeyS'] || keyState['ArrowDown']) {
-      cam[0] = wrap(cam[0] - upDir.x * moveSpeed);
-      cam[1] = wrap(cam[1] - upDir.y * moveSpeed);
-      shiftP(-upDir.z * moveSpeed / P.kw);
-    }
-    if (keyState['KeyA'] || keyState['ArrowLeft']) {
-      cam[0] = wrap(cam[0] - right.x * moveSpeed);
-      cam[1] = wrap(cam[1] - right.y * moveSpeed);
-      shiftP(-right.z * moveSpeed / P.kw);
-    }
-    if (keyState['KeyD'] || keyState['ArrowRight']) {
-      cam[0] = wrap(cam[0] + right.x * moveSpeed);
-      cam[1] = wrap(cam[1] + right.y * moveSpeed);
-      shiftP(right.z * moveSpeed / P.kw);
-    }
+    if (keyState['KeyW'] || keyState['ArrowUp']) nudge(upDir, moveSpeed);
+    if (keyState['KeyS'] || keyState['ArrowDown']) nudge(upDir, -moveSpeed);
+    if (keyState['KeyA'] || keyState['ArrowLeft']) nudge(right, -moveSpeed);
+    if (keyState['KeyD'] || keyState['ArrowRight']) nudge(right, moveSpeed);
 
-    cam = project(cam);
     if (keyState['KeyQ']) {
       C.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(forward, 0.02));
     }
