@@ -163,9 +163,15 @@ const up = new THREE.Vector3(0, 1, 0);
 const col = new THREE.Color();
 const rel = new THREE.Vector3();
 const sc = new THREE.Vector3();
+
+const geo = new THREE.CylinderGeometry(0.006, 0.0005, 0.18, 5, 1, true).translate(0, -0.09, 0);  // head (+Y) at the tracer position
+geo.setAttribute('color', new THREE.BufferAttribute(
+  Float32Array.from({length: geo.attributes.position.count * 3}, (_, i) => geo.attributes.position.getY(i / 3 | 0) > -0.01 ? 1 : 0), 3
+));  // white at head, black at tail
 const mesh = new THREE.InstancedMesh(
-  new THREE.CylinderGeometry(0.004, 0.002, 0.18, 5), new THREE.MeshBasicMaterial(), N * M
+  geo, new THREE.MeshBasicMaterial({vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false}), N * M
 );
+
 mesh.frustumCulled = false;
 S.add(mesh);
 for (let i = 0; i < N; i++) {
