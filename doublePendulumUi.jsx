@@ -1,6 +1,6 @@
 import {render} from 'preact';
 import {useEffect, useState} from 'preact/hooks';
-import {P, setCamOn, setParams, setTracers, triggerReset} from './doublePendulum';
+import {P, resample, setCamOn, setParams, setTracers, triggerReset} from './doublePendulum';
 
 function Controls() {
   const [muExp, setMuExp] = useState(0);
@@ -65,6 +65,8 @@ function Controls() {
       <label style={{gridColumn: '1/4'}}>
         <input type="checkbox" checked={camOn} onChange={(e) => setCamOnState(e.target.checked)}/> camera moves
       </label>
+
+      <button style={{gridColumn: '1/4'}} onClick={resample}>resample tracers</button>
     </div>
   );
 }

@@ -66,12 +66,20 @@ const sample = () => {  // Liouville-distributed point on H = E
     return [a, b, (r * Math.cos(p) - B * w2) / A, w2];
   }
 };
+export const resample = () => {
+  seeds.forEach(s => {
+    s.y = sample();
+    s.z = pert(s.y);
+    s.acc = s.w = s.lam = 0;
+  });
+};
+
 const project = y => {  // keep (θ, ω direction), rescale |ω| to the new energy; resample if outside the Hill region
   const k = Math.sqrt((P.E - V(y[0], y[1])) / T(y));
   return isFinite(k) ? [y[0], y[1], y[2] * k, y[3] * k] : sample();
 };
 
-const D0 = 1e-6, TAU_F = 8, LREF = 0.5;  // FTLE: separation, averaging window (sim time), colour scale
+const D0 = 1e-6, TAU_F = 2, LREF = 0.5;  // FTLE: separation, averaging window (sim time), colour scale
 const pert = y => project([y[0] + D0, y[1], y[2], y[3]]);
 const ftle = (s, dt) => {  // Benettin: track log-growth of a nearby shadow orbit, renormalise
   const [dx, dy, dz, dw] = [
@@ -85,7 +93,7 @@ const ftle = (s, dt) => {  // Benettin: track log-growth of a nearby shadow orbi
   }
   s.acc = s.acc * a + Math.log(d / D0);
   s.w = s.w * a + dt;
-  s.lam = s.acc / Math.max(s.w, 1);
+  s.lam = s.acc / Math.max(s.w, 0.25);
   const k = D0 / d;
   s.z = project([s.y[0] + dx * k, s.y[1] + dy * k, s.y[2] + dz * k, s.y[3] + dw * k]);
 };
@@ -171,6 +179,10 @@ geo.setAttribute('color', new THREE.BufferAttribute(
 const mesh = new THREE.InstancedMesh(
   geo, new THREE.MeshBasicMaterial({vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false}), N * M
 );
+mesh.material.onBeforeCompile = sh => {  // fade out near the camera (additive blending: darker = more transparent)
+  sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>',
+    '#include <project_vertex>\n  vColor.rgb *= smoothstep(0.05, 0.5, -mvPosition.z);');
+};
 
 mesh.frustumCulled = false;
 S.add(mesh);
